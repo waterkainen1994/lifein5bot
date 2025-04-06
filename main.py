@@ -1,4 +1,3 @@
-import os
 import logging
 import asyncio
 from aiogram import Bot, Dispatcher, types
@@ -7,40 +6,20 @@ from aiogram.filters import CommandStart, Command
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
+import os
 from gpt import generate_prediction
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
-
-logger.info("Starting bot initialization...")
-
-# Загружаем переменные окружения
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Проверяем, что переменные окружения загружены
-if not BOT_TOKEN:
-    logger.error("BOT_TOKEN is not set. Please check your environment variables.")
-    raise ValueError("BOT_TOKEN is not set")
-if not OPENAI_API_KEY:
-    logger.error("OPENAI_API_KEY is not set. Please check your environment variables.")
-    raise ValueError("OPENAI_API_KEY is not set")
-
-logger.info("Environment variables loaded successfully")
+# Настраиваем логирование
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # Создаём бота
-try:
-    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    logger.info("Bot initialized successfully")
-except Exception as e:
-    logger.error(f"Failed to initialize bot: {e}")
-    raise
-
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
-logger.info("Dispatcher initialized")
 
 # Хранилище данных в памяти
 user_prompts = {}  # Хранит анкеты пользователей
@@ -49,7 +28,7 @@ user_predictions = {}  # Хранит прогнозы
 @dp.message(CommandStart())
 async def start(message: types.Message):
     chat_id = message.chat.id
-    logger.info(f"Пользователь {chat_id} запустил бота")
+    logging.info(f"Пользователь {chat_id} запустил бота")
     await message.answer(
         "🙋 <b>ЭТО ЖДЁТ ТЕБЯ ЧЕРЕЗ 5 ЛЕТ</b> 🥲\n\n"
         "Всего 3 вопроса и ИИ построит прогноз твоей жизни на 5 лет вперёд 👏\n"
@@ -74,14 +53,14 @@ async def handle_filled_form(message: types.Message):
     chat_id = message.chat.id
     # Проверяем, что сообщение содержит ключевые слова анкеты
     if "Мой возраст" in message.text and "Страна, где я живу" in message.text:
-        logger.info(f"Получена анкета от chat_id {chat_id}")
+        logging.info(f"Получена анкета от chat_id {chat_id}")
         user_prompts[chat_id] = message.text
         await message.answer("🧠 Анализирую твою жизнь...")
         try:
             result = await generate_prediction(message.text)
             user_predictions[chat_id] = result
             await message.answer(f"<b>🔮 Прогноз:</b>\n{result}")
-            logger.info(f"Прогноз успешно отправлен для chat_id {chat_id}")
+            logging.info(f"Прогноз успешно отправлен для chat_id {chat_id}")
 
             # Создаём кнопку "Узнать про сценарии"
             markup = InlineKeyboardMarkup(inline_keyboard=[
@@ -90,11 +69,11 @@ async def handle_filled_form(message: types.Message):
             await message.answer("Хочешь узнать, что будет, если ты не изменишь сценарий?", reply_markup=markup)
         except Exception as e:
             await message.answer("Произошла ошибка при генерации прогноза. Пожалуйста, попробуй снова.")
-            logger.error(f"Ошибка при генерации прогноза для chat_id {chat_id}: {e}")
+            logging.error(f"Ошибка при генерации прогноза для chat_id {chat_id}: {e}")
     # Добавляем обработчик секретного текста для тестовой покупки
     elif message.text == "секретнаяпокупка123":  # Секретный текст
         chat_id = message.chat.id
-        logger.info(f"Секретная покупка для chat_id {chat_id}")
+        logging.info(f"Секретная покупка для chat_id {chat_id}")
         user_input = user_prompts.get(chat_id)
         previous_result = user_predictions.get(chat_id)
         if not user_input:
@@ -102,24 +81,99 @@ async def handle_filled_form(message: types.Message):
                 "Сначала заполни анкету! 😊\n"
                 "Отправь /start, чтобы начать заново и заполнить анкету."
             )
-            logger.warning(f"Анкета не найдена для chat_id: {chat_id}")
+            logging.warning(f"Анкета не найдена для chat_id: {chat_id}")
             return
         await message.answer("💫 Покупка успешна! Генерирую...")
+        try:
+            future = await generate_prediction(user_input, future_mode=True, previous_response=previous_result)
+            await message.answer(future)
+            await message.answer("Мы работаем над улучшением данного бота, ждите обновлений! 🚀")
+            logging.info(f"3 события успешно отправлены для chat_id {chat_id}")
+        except Exception as e:
+            await message.answer("Произошла ошибка при генерации событий. Пожалуйста, попробуй снова.")
+            logging.error(f"Ошибка при генерации событий для chat_id {chat_id}: {e}")
+    else:
+        await message.answer("Пожалуйста, заполни анкету, скопировав и заполнив предложенный шаблон.")
+        logging.warning(f"Сообщение от chat_id {chat_id} не распознано как анкета")
 
-# Основной цикл бота
+# Обработчик нажатия на кнопку "Узнать про сценарии"
+@dp.callback_query(lambda c: c.data == "learn_scenarios")
+async def process_learn_scenarios(callback_query: types.CallbackQuery):
+    chat_id = callback_query.from_user.id
+    await callback_query.message.answer(
+        "Чтобы узнать, что произойдёт, если ты не изменишь сценарий, необходимо оплатить 1 звёзду."
+    )
+    await bot.send_invoice(
+        chat_id=chat_id,
+        title="3 события в будущем",
+        description="Узнай, что произойдёт, если не изменишь сценарий.",
+        payload="buy_3_events",
+        provider_token="",
+        currency="XTR",
+        prices=[types.LabeledPrice(label="Прогноз", amount=1)],
+    )
+    await callback_query.answer()
+
+@dp.pre_checkout_query()
+async def process_pre_checkout_query(pre_checkout_query: types.PreCheckoutQuery):
+    logging.info(f"Получен pre_checkout_query: {pre_checkout_query.id}")
+    await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+
+@dp.message(lambda message: message.successful_payment)
+async def process_successful_payment(message: types.Message):
+    chat_id = message.chat.id
+    payload = message.successful_payment.invoice_payload
+    logging.info(f"Получена успешная оплата: {payload}")
+    
+    if payload == "buy_3_events":
+        user_input = user_prompts.get(chat_id)
+        previous_result = user_predictions.get(chat_id)
+        if not user_input:
+            await message.answer("Сначала заполни анкету!")
+            logging.warning(f"Анкета не найдена для chat_id: {chat_id}")
+            return
+        await message.answer("💫 Покупка успешна! Генерирую...")
+        try:
+            future = await generate_prediction(user_input, future_mode=True, previous_response=previous_result)
+            await message.answer(future)
+            await message.answer("Мы работаем над улучшением данного бота, ждите обновлений! 🚀")
+            logging.info(f"3 события успешно отправлены для chat_id {chat_id}")
+        except Exception as e:
+            await message.answer("Произошла ошибка при генерации событий. Пожалуйста, попробуй снова.")
+            logging.error(f"Ошибка при генерации событий для chat_id {chat_id}: {e}")
+
+# Закомментируем старую команду /test_payment
+# @dp.message(Command(commands=["test_payment", "testpayments"]))
+# async def test_payment(message: types.Message):
+#     chat_id = message.chat.id
+#     logging.info(f"Тестовая оплата для chat_id {chat_id}")
+#     user_input = user_prompts.get(chat_id)
+#     previous_result = user_predictions.get(chat_id)
+#     if not user_input:
+#         await message.answer(
+#             "Сначала заполни анкету! 😊\n"
+#             "Отправь /start, чтобы начать заново и заполнить анкету."
+#         )
+#         logging.warning(f"Анкета не найдена для chat_id: {chat_id}")
+#         return
+#     await message.answer("💫 Покупка успешна! Генерирую...")
+#     try:
+#         future = await generate_prediction(user_input, future_mode=True, previous_response=previous_result)
+#         await message.answer(future)
+#         await message.answer("Мы работаем над улучшением данного бота, ждите обновлений! 🚀")
+#         logging.info(f"3 события успешно отправлены для chat_id {chat_id}")
+#     except Exception as e:
+#         await message.answer("Произошла ошибка при генерации событий. Пожалуйста, попробуй снова.")
+#         logging.error(f"Ошибка при генерации событий для chat_id {chat_id}: {e}")
+
+# Обработчик для отладки необработанных сообщений
+@dp.message()
+async def debug_unhandled(message: types.Message):
+    logging.info(f"Необработанное сообщение: {message.text} от chat_id {message.chat.id}")
+
 async def main():
-    logger.info("Starting polling...")
-    try:
-        await dp.start_polling(bot)
-        logger.info("Polling started successfully")
-    except Exception as e:
-        logger.error(f"Error during polling: {e}")
-        raise
+    print("🚀 Бот запущен...")
+    await dp.start_polling(bot)
 
-if __name__ == "__main__":
-    logger.info("Running main function...")
-    try:
-        asyncio.run(main())
-    except Exception as e:
-        logger.error(f"Failed to run bot: {e}")
-        raise
+if __name__ == '__main__':
+    asyncio.run(main())
