@@ -39,7 +39,7 @@ async def generate_prediction(user_input, future_mode=False, previous_response=N
             },
             {"role": "user", "content": prompt}
         ],
-        max_tokens=1500,  # Оставляем 1500 для большей детализации
+        max_tokens=1000,  # Оставляем 1500 для большей детализации
         temperature=0.7,
     )
     
