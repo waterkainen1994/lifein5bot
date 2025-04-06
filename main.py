@@ -163,7 +163,7 @@ async def handle_filled_form(message: types.Message):
                 "Попробуй сократить свои ответы в анкете и отправить её снова. Напиши /start, чтобы начать заново!"
             )
             logging.error(f"Ошибка при генерации прогноза для chat_id {chat_id}: {e}")
-    # Добавляем обработчик секретного текста для тестовой покупки
+    # Оставляем обработчик секретного текста
     elif message.text == "секретнаяпокупка123":
         chat_id = message.chat.id
         logging.info(f"Секретная покупка для chat_id {chat_id}")
@@ -220,6 +220,8 @@ async def process_learn_scenarios(callback_query: types.CallbackQuery):
     except Exception as e:
         logging.error(f"Ошибка при удалении сообщения для chat_id {chat_id}: {e}")
 
+    await callback_query.message.answer(
+        "Ты на шаге от того, чтобы узнать 3 ключевых события, которые ждут тебя через 5 лет, если ты не изменишь свой путь! 💡 Это может стать важным открытием для твоего будущего. Всего за 1 звезду ⭐ (валюта Telegram, которую ты можешь купить прямо здесь) я раскрою тебе эти события. Готов?"
     )
 
     try:
@@ -235,7 +237,9 @@ async def process_learn_scenarios(callback_query: types.CallbackQuery):
         logging.info(f"Счёт на 1 звезду отправлен для chat_id {chat_id}")
     except Exception as e:
         logging.error(f"Ошибка при отправке счёта для chat_id {chat_id}: {str(e)} (тип ошибки: {type(e).__name__})")
-
+        await callback_query.message.answer(
+            "К сожалению, не удалось создать счёт. 😔 Возможно, Telegram Stars недоступны в твоём регионе. Пожалуйста, свяжись с поддержкой Telegram."
+        )
 
     await callback_query.answer()
 
@@ -304,39 +308,6 @@ async def try_again(callback_query: types.CallbackQuery):
         "<b>На основе этих данных я создам детальное описание моей жизни через 5 лет!</b>"
     )
     await callback_query.answer()
-
-# Тестовая команда для оплаты
-@dp.message(Command(commands=["test_payment"]))
-async def test_payment(message: types.Message):
-    chat_id = message.chat.id
-    username = message.from_user.username or message.from_user.first_name
-    
-    logging.info(f"Тестовая оплата для chat_id {chat_id}")
-    user_input = user_prompts.get(chat_id)
-    previous_result = user_predictions.get(chat_id)
-    if not user_input:
-        await message.answer(
-            "Сначала заполни анкету! 😊\n"
-            "Отправь /start, чтобы начать заново и заполнить анкету."
-        )
-        logging.warning(f"Анкета не найдена для chat_id: {chat_id}")
-        return
-    await message.answer("💫 Покупка успешна! Генерирую...")
-    try:
-        future = await generate_prediction(user_input, future_mode=True, previous_response=previous_result)
-        message_parts = split_text(future, TELEGRAM_MESSAGE_LIMIT)
-        for part in message_parts:
-            await message.answer(part)
-            await asyncio.sleep(0.5)
-        await message.answer("Если хочешь попробовать другой сценарий, заполни анкету заново с помощью /start! 😊")
-        
-        # Увеличиваем счётчик оплат и сгенерированных прогнозов
-        await log_analytics(chat_id, username, forecast_count=1, payment_count=1)
-        
-        logging.info(f"3 события успешно отправлены для chat_id {chat_id}")
-    except Exception as e:
-        await message.answer("Произошла ошибка при генерации событий. Пожалуйста, попробуй снова.")
-        logging.error(f"Ошибка при генерации событий для chat_id {chat_id}: {e}")
 
 @dp.pre_checkout_query()
 async def process_pre_checkout_query(pre_checkout_query: types.PreCheckoutQuery):
