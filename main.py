@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import time
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
@@ -8,6 +9,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
 import os
 from gpt import generate_prediction
+from analytics import update_analytics_data  # Импортируем функции аналитики
 
 load_dotenv()
 
@@ -25,10 +27,66 @@ dp = Dispatcher()
 user_prompts = {}  # Хранит анкеты пользователей
 user_predictions = {}  # Хранит прогнозы
 processed_callbacks = set()  # Хранит обработанные callback_query_id
+user_analytics = {}  # Хранит аналитику: {chat_id: {"start_count": int, "forecast_count": int, "payment_count": int, "start_time": float}}
+user_start_times = {}  # Хранит время начала сессии: {chat_id: start_time}
+
+# Максимальная длина сообщения в Telegram
+TELEGRAM_MESSAGE_LIMIT = 4096
+
+# Функция для разбиения текста на части
+def split_text(text, limit=TELEGRAM_MESSAGE_LIMIT):
+    parts = []
+    while len(text) > limit:
+        split_pos = text[:limit].rfind('\n')
+        if split_pos == -1:
+            split_pos = text[:limit].rfind(' ')
+            if split_pos == -1:
+                split_pos = limit
+        parts.append(text[:split_pos])
+        text = text[split_pos:].lstrip()
+    if text:
+        parts.append(text)
+    return parts
+
+# Функция для обновления аналитики
+async def log_analytics(chat_id, username, start_count=0, forecast_count=0, payment_count=0):
+    if chat_id not in user_analytics:
+        user_analytics[chat_id] = {
+            "start_count": 0,
+            "forecast_count": 0,
+            "payment_count": 0,
+            "start_time": user_start_times.get(chat_id, time.time())
+        }
+    
+    user_analytics[chat_id]["start_count"] += start_count
+    user_analytics[chat_id]["forecast_count"] += forecast_count
+    user_analytics[chat_id]["payment_count"] += payment_count
+    
+    # Вычисляем время использования (в минутах)
+    start_time = user_analytics[chat_id]["start_time"]
+    usage_time = (time.time() - start_time) / 60  # Время в минутах
+    
+    # Обновляем данные в CSV
+    update_analytics_data(
+        username=username,
+        user_id=chat_id,
+        start_count=user_analytics[chat_id]["start_count"],
+        forecast_count=user_analytics[chat_id]["forecast_count"],
+        payment_count=user_analytics[chat_id]["payment_count"],
+        usage_time=usage_time
+    )
 
 @dp.message(CommandStart())
 async def start(message: types.Message):
     chat_id = message.chat.id
+    username = message.from_user.username or message.from_user.first_name
+    
+    # Сохраняем время начала сессии
+    user_start_times[chat_id] = time.time()
+    
+    # Увеличиваем счётчик нажатий /start
+    await log_analytics(chat_id, username, start_count=1)
+    
     logging.info(f"Пользователь {chat_id} запустил бота")
     await message.answer(
         "🌟 <b>УЗНАЙ, ЧТО ЖДЁТ ТЕБЯ ЧЕРЕЗ 5 ЛЕТ!</b> 🌟\n\n"
@@ -58,6 +116,8 @@ async def start(message: types.Message):
 @dp.message(lambda message: not message.text.startswith('/'))
 async def handle_filled_form(message: types.Message):
     chat_id = message.chat.id
+    username = message.from_user.username or message.from_user.first_name
+    
     # Проверяем, что сообщение содержит ключевые слова анкеты
     if "Мой возраст" in message.text and "Страна, где я живу" in message.text:
         logging.info(f"Получена анкета от chat_id {chat_id}")
@@ -66,11 +126,25 @@ async def handle_filled_form(message: types.Message):
         try:
             result = await generate_prediction(message.text)
             user_predictions[chat_id] = result
-            await message.answer(
+
+            # Формируем сообщение
+            full_message = (
                 "<b>🔮 Твой прогноз на 5 лет вперёд:</b>\n\n"
                 "Вот что ждёт тебя, если ты продолжишь идти текущим путём:\n\n"
                 f"{result}"
             )
+
+            # Разбиваем текст на части, если он слишком длинный
+            message_parts = split_text(full_message, TELEGRAM_MESSAGE_LIMIT)
+
+            # Отправляем каждую часть
+            for part in message_parts:
+                await message.answer(part)
+                await asyncio.sleep(0.5)
+
+            # Увеличиваем счётчик сгенерированных прогнозов
+            await log_analytics(chat_id, username, forecast_count=1)
+            
             logging.info(f"Прогноз успешно отправлен для chat_id {chat_id}")
 
             # Создаём кнопки
@@ -84,10 +158,13 @@ async def handle_filled_form(message: types.Message):
                 reply_markup=markup
             )
         except Exception as e:
-            await message.answer("Произошла ошибка при генерации прогноза. Пожалуйста, попробуй снова.")
+            await message.answer(
+                "К сожалению, не удалось сгенерировать прогноз. 😔 Возможно, текст слишком длинный. "
+                "Попробуй сократить свои ответы в анкете и отправить её снова. Напиши /start, чтобы начать заново!"
+            )
             logging.error(f"Ошибка при генерации прогноза для chat_id {chat_id}: {e}")
     # Добавляем обработчик секретного текста для тестовой покупки
-    elif message.text == "секретнаяпокупка123":  # Секретный текст
+    elif message.text == "секретнаяпокупка123":
         chat_id = message.chat.id
         logging.info(f"Секретная покупка для chat_id {chat_id}")
         user_input = user_prompts.get(chat_id)
@@ -102,8 +179,15 @@ async def handle_filled_form(message: types.Message):
         await message.answer("💫 Покупка успешна! Генерирую...")
         try:
             future = await generate_prediction(user_input, future_mode=True, previous_response=previous_result)
-            await message.answer(future)
+            message_parts = split_text(future, TELEGRAM_MESSAGE_LIMIT)
+            for part in message_parts:
+                await message.answer(part)
+                await asyncio.sleep(0.5)
             await message.answer("Если хочешь попробовать другой сценарий, заполни анкету заново с помощью /start! 😊")
+            
+            # Увеличиваем счётчик оплат и сгенерированных прогнозов
+            await log_analytics(chat_id, username, forecast_count=1, payment_count=1)
+            
             logging.info(f"3 события успешно отправлены для chat_id {chat_id}")
         except Exception as e:
             await message.answer("Произошла ошибка при генерации событий. Пожалуйста, попробуй снова.")
@@ -119,39 +203,35 @@ async def handle_filled_form(message: types.Message):
 async def process_learn_scenarios(callback_query: types.CallbackQuery):
     callback_id = callback_query.id
     chat_id = callback_query.from_user.id
+    username = callback_query.from_user.username or callback_query.from_user.first_name
     message_id = callback_query.message.message_id
 
-    # Проверяем, был ли этот callback уже обработан
     if callback_id in processed_callbacks:
         logging.info(f"Повторный callback {callback_id} от chat_id {chat_id}, игнорируем")
         await callback_query.answer("Счёт уже отправлен, пожалуйста, подожди! 😊")
         return
 
-    # Добавляем callback в обработанные
     processed_callbacks.add(callback_id)
     logging.info(f"Пользователь {chat_id} нажал на кнопку 'Раскрыть 3 события' (callback_id: {callback_id})")
 
-    # Удаляем сообщение с кнопками, чтобы избежать повторных нажатий
     try:
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
         logging.info(f"Сообщение с кнопками (message_id: {message_id}) удалено для chat_id {chat_id}")
     except Exception as e:
         logging.error(f"Ошибка при удалении сообщения для chat_id {chat_id}: {e}")
 
-    # Отправляем сообщение перед оплатой
     await callback_query.message.answer(
         "Ты на шаге от того, чтобы узнать 3 ключевых события, которые ждут тебя через 5 лет, если ты не изменишь свой путь! 💡 Это может стать важным открытием для твоего будущего. Всего за 1 звезду ⭐ (валюта Telegram, которую ты можешь купить прямо здесь) я раскрою тебе эти события. Готов?\n\n"
         "⚠️ Если звёзды недоступны в твоём регионе, напиши /test_payment для тестовой оплаты."
     )
 
-    # Отправляем счёт (используем подход из старой версии, но с обработкой ошибок)
     try:
         await bot.send_invoice(
             chat_id=chat_id,
             title="3 события в будущем",
             description="Узнай, что произойдёт, если не изменишь сценарий.",
             payload="buy_3_events",
-            provider_token="",  # Возвращаем provider_token как в старой версии
+            provider_token="",
             currency="XTR",
             prices=[types.LabeledPrice(label="Прогноз", amount=1)],
         )
@@ -170,7 +250,6 @@ async def share_prediction(callback_query: types.CallbackQuery):
     chat_id = callback_query.from_user.id
     message_id = callback_query.message.message_id
 
-    # Удаляем сообщение с кнопками
     try:
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
         logging.info(f"Сообщение с кнопками (message_id: {message_id}) удалено для chat_id {chat_id}")
@@ -183,12 +262,15 @@ async def share_prediction(callback_query: types.CallbackQuery):
         logging.warning(f"Прогноз не найден для chat_id {chat_id}")
         return
     share_text = f"🔮 Мой прогноз на 5 лет вперёд от @LifeIn5Bot:\n\n{prediction}\n\nУзнай, что ждёт тебя: t.me/LifeIn5Bot"
-    await callback_query.message.answer(
-        "Вот твой прогноз! Поделись им с друзьями:",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Поделиться", url=f"https://t.me/share/url?url={share_text}")]
-        ])
-    )
+    message_parts = split_text(share_text, TELEGRAM_MESSAGE_LIMIT)
+    for part in message_parts:
+        await callback_query.message.answer(
+            part,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Поделиться", url=f"https://t.me/share/url?url={part}")]
+            ])
+        )
+        await asyncio.sleep(0.5)
     await callback_query.answer()
 
 # Обработчик нажатия на кнопку "Попробовать снова"
@@ -197,14 +279,12 @@ async def try_again(callback_query: types.CallbackQuery):
     chat_id = callback_query.from_user.id
     message_id = callback_query.message.message_id
 
-    # Удаляем сообщение с кнопками
     try:
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
         logging.info(f"Сообщение с кнопками (message_id: {message_id}) удалено для chat_id {chat_id}")
     except Exception as e:
         logging.error(f"Ошибка при удалении сообщения для chat_id {chat_id}: {e}")
 
-    # Очищаем предыдущие данные
     user_prompts.pop(chat_id, None)
     user_predictions.pop(chat_id, None)
     await callback_query.message.answer(
@@ -234,6 +314,8 @@ async def try_again(callback_query: types.CallbackQuery):
 @dp.message(Command(commands=["test_payment"]))
 async def test_payment(message: types.Message):
     chat_id = message.chat.id
+    username = message.from_user.username or message.from_user.first_name
+    
     logging.info(f"Тестовая оплата для chat_id {chat_id}")
     user_input = user_prompts.get(chat_id)
     previous_result = user_predictions.get(chat_id)
@@ -247,11 +329,15 @@ async def test_payment(message: types.Message):
     await message.answer("💫 Покупка успешна! Генерирую...")
     try:
         future = await generate_prediction(user_input, future_mode=True, previous_response=previous_result)
-        await message.answer(
-            "<b>Вот что может произойти, если ты не изменишь свой путь:</b>\n\n"
-            f"{future}"
-        )
+        message_parts = split_text(future, TELEGRAM_MESSAGE_LIMIT)
+        for part in message_parts:
+            await message.answer(part)
+            await asyncio.sleep(0.5)
         await message.answer("Если хочешь попробовать другой сценарий, заполни анкету заново с помощью /start! 😊")
+        
+        # Увеличиваем счётчик оплат и сгенерированных прогнозов
+        await log_analytics(chat_id, username, forecast_count=1, payment_count=1)
+        
         logging.info(f"3 события успешно отправлены для chat_id {chat_id}")
     except Exception as e:
         await message.answer("Произошла ошибка при генерации событий. Пожалуйста, попробуй снова.")
@@ -265,6 +351,7 @@ async def process_pre_checkout_query(pre_checkout_query: types.PreCheckoutQuery)
 @dp.message(lambda message: message.successful_payment)
 async def process_successful_payment(message: types.Message):
     chat_id = message.chat.id
+    username = message.from_user.username or message.from_user.first_name
     payload = message.successful_payment.invoice_payload
     logging.info(f"Получена успешная оплата: {payload}")
     
@@ -278,11 +365,15 @@ async def process_successful_payment(message: types.Message):
         await message.answer("💫 Покупка успешна! Генерирую твои 3 ключевых события... ⏳")
         try:
             future = await generate_prediction(user_input, future_mode=True, previous_response=previous_result)
-            await message.answer(
-                "<b>Вот что может произойти, если ты не изменишь свой путь:</b>\n\n"
-                f"{future}"
-            )
+            message_parts = split_text(future, TELEGRAM_MESSAGE_LIMIT)
+            for part in message_parts:
+                await message.answer(part)
+                await asyncio.sleep(0.5)
             await message.answer("Если хочешь попробовать другой сценарий, заполни анкету заново с помощью /start! 😊")
+            
+            # Увеличиваем счётчик оплат и сгенерированных прогнозов
+            await log_analytics(chat_id, username, forecast_count=1, payment_count=1)
+            
             logging.info(f"3 события успешно отправлены для chat_id {chat_id}")
         except Exception as e:
             await message.answer("Произошла ошибка при генерации событий. Пожалуйста, попробуй снова.")
