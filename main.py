@@ -90,7 +90,7 @@ async def start(message: types.Message):
     logging.info(f"Пользователь {chat_id} запустил бота")
     await message.answer(
         "🌟 <b>УЗНАЙ, ЧТО ЖДЁТ ТЕБЯ ЧЕРЕЗ 5 ЛЕТ!</b> 🌟\n\n"
-        "Я помогу тебе заглянуть в будущее с помощью ИИ! Ответь на несколько вопросов о себе, и я создам подробный прогноз твоей жизни на 5 лет вперёд. А после ты сможешь узнать, что будет, если ничего не изменить, всего за 1 звезду ⭐! Это займёт всего пару минут! 😊\n\n"
+        "Я помогу тебе заглянуть в будущее с помощью ИИ! Ответь на несколько вопросов о себе, и я создам подробный прогноз твоей жизни на 5 лет вперёд. А после ты сможешь узнать, что будет, если ничего не изменить, всего за 30 звёзд ⭐! Это займёт всего пару минут! 😊\n\n"
         "Чтобы начать, просто заполни анкету ниже 👇"
     )
     await message.answer(
@@ -149,7 +149,7 @@ async def handle_filled_form(message: types.Message):
 
             # Создаём кнопки
             markup = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Раскрыть 3 события за 1 звезду ✨", callback_data="learn_scenarios")],
+                [InlineKeyboardButton(text="Раскрыть 3 события за 30 звёзд ✨", callback_data="learn_scenarios")],
                 [InlineKeyboardButton(text="Поделиться прогнозом 📤", callback_data="share_prediction")],
                 [InlineKeyboardButton(text="Попробовать снова 🔄", callback_data="try_again")]
             ])
@@ -221,7 +221,7 @@ async def process_learn_scenarios(callback_query: types.CallbackQuery):
         logging.error(f"Ошибка при удалении сообщения для chat_id {chat_id}: {e}")
 
     await callback_query.message.answer(
-        "Ты на шаге от того, чтобы узнать 3 ключевых события, которые ждут тебя через 5 лет, если ты не изменишь свой путь! 💡 Это может стать важным открытием для твоего будущего. Всего за 1 звезду ⭐ (валюта Telegram, которую ты можешь купить прямо здесь) я раскрою тебе эти события. Готов?"
+        "Ты на шаге от того, чтобы узнать 3 ключевых события, которые ждут тебя через 5 лет, если ты не изменишь свой путь! 💡 Это может стать важным открытием для твоего будущего. Всего за 30 звёзд ⭐ (валюта Telegram, которую ты можешь купить прямо здесь) я раскрою тебе эти события. Готов?"
     )
 
     try:
@@ -232,9 +232,9 @@ async def process_learn_scenarios(callback_query: types.CallbackQuery):
             payload="buy_3_events",
             provider_token="",
             currency="XTR",
-            prices=[types.LabeledPrice(label="Прогноз", amount=1)],
+            prices=[types.LabeledPrice(label="Прогноз", amount=30)],
         )
-        logging.info(f"Счёт на 1 звезду отправлен для chat_id {chat_id}")
+        logging.info(f"Счёт на 30 звёзд отправлен для chat_id {chat_id}")
     except Exception as e:
         logging.error(f"Ошибка при отправке счёта для chat_id {chat_id}: {str(e)} (тип ошибки: {type(e).__name__})")
         await callback_query.message.answer(
@@ -318,19 +318,32 @@ async def process_pre_checkout_query(pre_checkout_query: types.PreCheckoutQuery)
 async def process_successful_payment(message: types.Message):
     chat_id = message.chat.id
     username = message.from_user.username or message.from_user.first_name
+    logging.info(f"Начало обработки успешной оплаты для chat_id {chat_id}")
+
+    # Логируем полное содержимое message.successful_payment
+    logging.info(f"Полное содержимое successful_payment: {message.successful_payment}")
+
     payload = message.successful_payment.invoice_payload
-    logging.info(f"Получена успешная оплата: {payload}")
-    
+    logging.info(f"Получена успешная оплата с payload: {payload}")
+
     if payload == "buy_3_events":
+        logging.info(f"Payload совпадает, начинаем обработку для chat_id {chat_id}")
         user_input = user_prompts.get(chat_id)
         previous_result = user_predictions.get(chat_id)
+        logging.info(f"Получены user_input: {user_input is not None}, previous_result: {previous_result is not None}")
+
         if not user_input:
-            await message.answer("Сначала заполни анкету! Нажми /start, чтобы начать заново.")
             logging.warning(f"Анкета не найдена для chat_id: {chat_id}")
+            await message.answer("Сначала заполни анкету! Нажми /start, чтобы начать заново.")
             return
+
         await message.answer("💫 Покупка успешна! Генерирую твои 3 ключевых события... ⏳")
+        logging.info(f"Сообщение о начале генерации отправлено для chat_id {chat_id}")
+
         try:
             future = await generate_prediction(user_input, future_mode=True, previous_response=previous_result)
+            logging.info(f"Прогноз успешно сгенерирован для chat_id {chat_id}")
+
             message_parts = split_text(future, TELEGRAM_MESSAGE_LIMIT)
             for part in message_parts:
                 await message.answer(part)
@@ -342,8 +355,11 @@ async def process_successful_payment(message: types.Message):
             
             logging.info(f"3 события успешно отправлены для chat_id {chat_id}")
         except Exception as e:
-            await message.answer("Произошла ошибка при генерации событий. Пожалуйста, попробуй снова.")
             logging.error(f"Ошибка при генерации событий для chat_id {chat_id}: {e}")
+            await message.answer("Произошла ошибка при генерации событий. Пожалуйста, попробуй снова.")
+    else:
+        logging.warning(f"Неизвестный payload: {payload} для chat_id {chat_id}")
+        await message.answer("Произошла ошибка: неизвестный тип оплаты. Пожалуйста, свяжись с поддержкой.")
 
 # Обработчик для отладки необработанных сообщений
 @dp.message()
