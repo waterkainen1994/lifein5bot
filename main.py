@@ -113,7 +113,7 @@ async def start(message: types.Message):
     )
 
 # Обработчик анкеты
-@dp.message(lambda message: not message.text.startswith('/'))
+@dp.message(lambda message: hasattr(message, 'text') and not message.text.startswith('/'))
 async def handle_filled_form(message: types.Message):
     chat_id = message.chat.id
     username = message.from_user.username or message.from_user.first_name
@@ -232,7 +232,7 @@ async def process_learn_scenarios(callback_query: types.CallbackQuery):
             payload="buy_3_events",
             provider_token="",
             currency="XTR",
-            prices=[types.LabeledPrice(label="Прогноз", amount=1)],  # Изменяем цену на 1 звезду
+            prices=[types.LabeledPrice(label="Прогноз", amount=1)],
         )
         logging.info(f"Счёт на 1 звезду отправлен для chat_id {chat_id}")
     except Exception as e:
@@ -364,7 +364,9 @@ async def process_successful_payment(message: types.Message):
 # Обработчик для отладки необработанных сообщений
 @dp.message()
 async def debug_unhandled(message: types.Message):
-    logging.info(f"Необработанное сообщение: {message.text} от chat_id {message.chat.id}")
+    # Проверяем, есть ли атрибут text, чтобы избежать ошибок в логах
+    text = getattr(message, 'text', 'Нет текста')
+    logging.info(f"Необработанное сообщение: {text} от chat_id {message.chat.id}")
 
 async def main():
     print("🚀 Бот запущен...")
