@@ -113,7 +113,7 @@ async def start(message: types.Message):
     )
 
 # Обработчик анкеты
-@dp.message(lambda message: hasattr(message, 'text') and not message.text.startswith('/'))
+@dp.message(lambda message: message.text is not None and not message.text.startswith('/'))
 async def handle_filled_form(message: types.Message):
     chat_id = message.chat.id
     username = message.from_user.username or message.from_user.first_name
